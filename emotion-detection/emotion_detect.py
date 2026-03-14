@@ -2,10 +2,10 @@ import cv2
 import numpy as np
 from tensorflow.keras.models import load_model
 
-# Load trained ResNet model
+# Load trained model
 model = load_model("emotion_resnet_model.keras", compile=False)
 
-# Emotion labels (FER2013)
+# Emotion labels (FER2013 order)
 emotion_labels = ["Angry","Disgust","Fear","Happy","Neutral","Sad","Surprise"]
 
 # Load face detector
@@ -19,36 +19,47 @@ cap = cv2.VideoCapture(0)
 while True:
 
     ret, frame = cap.read()
+
     if not ret:
         break
 
+    # Convert to grayscale for face detection
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    # Detect faces
-    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+    faces = face_cascade.detectMultiScale(
+        gray,
+        scaleFactor=1.2,
+        minNeighbors=7,
+        minSize=(80,80)
+    )
 
     for (x, y, w, h) in faces:
 
-        # Draw rectangle
+        # Draw rectangle around face
         cv2.rectangle(frame,(x,y),(x+w,y+h),(0,255,0),2)
 
         # Crop face
         face = frame[y:y+h, x:x+w]
 
-        # Resize for model
+        # Resize exactly like training
         face = cv2.resize(face,(224,224))
+
+        # Convert BGR → RGB
+        face = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
 
         # Normalize
         face = face / 255.0
 
-        # Reshape for CNN
+        # Reshape for model
         face = np.reshape(face,(1,224,224,3))
 
         # Predict emotion
         preds = model.predict(face, verbose=0)
-        emotion = emotion_labels[np.argmax(preds)]
 
-        # Show emotion text
+        emotion_index = np.argmax(preds)
+        emotion = emotion_labels[emotion_index]
+
+        # Display emotion
         cv2.putText(
             frame,
             emotion,
@@ -59,6 +70,7 @@ while True:
             2
         )
 
+    # Show webcam window
     cv2.imshow("Emotion Detection", frame)
 
     # Press Q to exit
