@@ -1,19 +1,70 @@
 import cv2
+import torch
 import numpy as np
-from tensorflow.keras.models import load_model
+import torch.nn.functional as F
+from torchvision import models, transforms
 
-# Load trained model
-model = load_model("emotion_resnet_model.keras", compile=False)
+# -----------------------------
+# Device
+# -----------------------------
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+print("Device:", DEVICE)
 
-# Emotion labels (FER2013 order)
-emotion_labels = ["Angry","Disgust","Fear","Happy","Neutral","Sad","Surprise"]
+# -----------------------------
+# Emotion Labels (RAF-DB order)
+# -----------------------------
+emotion_labels = [
+    "Surprise",
+    "Fear",
+    "Disgust",
+    "Happiness",
+    "Sadness",
+    "Anger",
+    "Neutral"
+]
 
-# Load face detector
+# -----------------------------
+# Load ResNet50 Model
+# -----------------------------
+model = models.resnet50(weights=None)
+
+model.fc = torch.nn.Sequential(
+    torch.nn.Linear(model.fc.in_features, 512),
+    torch.nn.ReLU(),
+    torch.nn.Dropout(0.5),
+    torch.nn.Linear(512, 7)
+)
+
+model.load_state_dict(torch.load("emotion_resnet50.pth", map_location=DEVICE))
+
+model = model.to(DEVICE)
+model.eval()
+
+print("Model loaded successfully")
+
+# -----------------------------
+# Image Preprocessing
+# -----------------------------
+transform = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.Resize((224,224)),
+    transforms.ToTensor(),
+    transforms.Normalize(
+        mean=[0.485,0.456,0.406],
+        std=[0.229,0.224,0.225]
+    )
+])
+
+# -----------------------------
+# Face Detector
+# -----------------------------
 face_cascade = cv2.CascadeClassifier(
     cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
 )
 
-# Start webcam
+# -----------------------------
+# Webcam
+# -----------------------------
 cap = cv2.VideoCapture(0)
 
 while True:
@@ -23,57 +74,63 @@ while True:
     if not ret:
         break
 
-    # Convert to grayscale for face detection
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     faces = face_cascade.detectMultiScale(
         gray,
         scaleFactor=1.2,
-        minNeighbors=7,
+        minNeighbors=6,
         minSize=(80,80)
     )
 
-    for (x, y, w, h) in faces:
+    for (x,y,w,h) in faces:
 
-        # Draw rectangle around face
-        cv2.rectangle(frame,(x,y),(x+w,y+h),(0,255,0),2)
+        # Expand crop slightly
+        pad = int(0.2 * w)
 
-        # Crop face
-        face = frame[y:y+h, x:x+w]
+        x1 = max(0, x-pad)
+        y1 = max(0, y-pad)
+        x2 = min(frame.shape[1], x+w+pad)
+        y2 = min(frame.shape[0], y+h+pad)
 
-        # Resize exactly like training
-        face = cv2.resize(face,(224,224))
+        face = frame[y1:y2, x1:x2]
 
-        # Convert BGR → RGB
+        # Draw rectangle
+        cv2.rectangle(frame,(x1,y1),(x2,y2),(0,255,0),2)
+
+        # Convert BGR -> RGB
         face = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
 
-        # Normalize
-        face = face / 255.0
+        # Preprocess
+        face = transform(face).unsqueeze(0).to(DEVICE)
 
-        # Reshape for model
-        face = np.reshape(face,(1,224,224,3))
+        # Prediction
+        with torch.no_grad():
 
-        # Predict emotion
-        preds = model.predict(face, verbose=0)
+            outputs = model(face)
 
-        emotion_index = np.argmax(preds)
+            probs = F.softmax(outputs, dim=1)
+
+            emotion_index = torch.argmax(probs).item()
+
+            confidence = probs[0][emotion_index].item()
+
         emotion = emotion_labels[emotion_index]
 
-        # Display emotion
+        text = f"{emotion} {confidence:.2f}"
+
         cv2.putText(
             frame,
-            emotion,
-            (x, y-10),
+            text,
+            (x1, y1-10),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.9,
             (0,255,0),
             2
         )
 
-    # Show webcam window
     cv2.imshow("Emotion Detection", frame)
 
-    # Press Q to exit
     if cv2.waitKey(1) & 0xFF == ord("q"):
         break
 
